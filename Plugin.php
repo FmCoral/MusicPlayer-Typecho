@@ -157,19 +157,6 @@ class Plugin implements PluginInterface
                         self::createOrUpdateSong($newFolder, $_POST, $_FILES);
                         $msg = '歌曲「' . $newFolder . '」已更新';
                         break;
-
-                    case 'move_up':
-                    case 'move_down':
-                        $folder = trim($_POST['folder'] ?? '');
-                        if ($folder === '') throw new \RuntimeException('未指定歌曲');
-                        self::moveSong($folder, $_POST['mp-action'] === 'move_up' ? -1 : 1);
-                        $msg = '歌曲「' . $folder . '」已' . ($_POST['mp-action'] === 'move_up' ? '上移' : '下移');
-                        break;
-
-                    case 'randomize':
-                        self::randomizeOrder();
-                        $msg = '顺序已随机打乱';
-                        break;
                 }
 
                 header('Location: ' . $pageUrl . '&mp_msg=' . urlencode($msg ?? '') . '&mp_status=success');
@@ -208,20 +195,13 @@ class Plugin implements PluginInterface
            . ($hasDir ? '' : ' <span style="color:#c33">（不存在）</span>');
         echo '</div>';
 
-        // Refresh cache + randomize buttons
-        echo '<div style="margin-bottom:16px;display:flex;gap:12px;align-items:center">';
-        echo '<form method="post" action="' . $pageUrl . '">';
+        // Refresh cache button
+        echo '<form method="post" action="' . $pageUrl . '" style="margin-bottom:16px">';
         echo '<input type="hidden" name="_" value="' . $security->getToken($options->request->getRequestUrl()) . '">';
         echo '<input type="hidden" name="mp-action" value="refresh">';
         echo '<button type="submit" class="btn primary">🔄 刷新缓存</button>';
-        echo ' <span class="description">扫描目录，保留已有外链和排序</span>';
+        echo ' <span class="description">扫描目录，保留已有外链</span>';
         echo '</form>';
-        echo '<form method="post" action="' . $pageUrl . '">';
-        echo '<input type="hidden" name="_" value="' . $security->getToken($options->request->getRequestUrl()) . '">';
-        echo '<input type="hidden" name="mp-action" value="randomize">';
-        echo '<button type="submit" class="btn btn-xs">🎲 随机排列</button>';
-        echo '</form>';
-        echo '</div>';
 
         // ── New song form ──
         echo '<details style="margin-bottom:16px;border:1px solid #e9e9e9;border-radius:4px;padding:12px 14px" open>';
@@ -270,7 +250,7 @@ class Plugin implements PluginInterface
             foreach ($cache as $folder => $info) {
                 $songs[] = $info + ['folder' => $folder];
             }
-            usort($songs, fn($a, $b) => ($a['order'] ?? 0) - ($b['order'] ?? 0));
+            usort($songs, fn($a, $b) => strcmp($a['folder'], $b['folder']));
         }
 
         $editFolder = $_GET['edit'] ?? '';
@@ -282,10 +262,9 @@ class Plugin implements PluginInterface
         } else {
             echo '<div class="typecho-table-wrap">';
             echo '<table class="typecho-list-table">';
-            echo '<thead><tr><th style="width:40px">#</th><th style="text-align:left">歌曲名称</th><th>音频来源</th><th>歌词来源</th><th>封面来源</th><th style="text-align:center">操作</th></tr></thead><tbody>';
+            echo '<thead><tr><th style="text-align:left">歌曲名称</th><th>音频来源</th><th>歌词来源</th><th>封面来源</th><th style="text-align:center">操作</th></tr></thead><tbody>';
 
-            $songCount = count($songs);
-            foreach ($songs as $i => $s) {
+            foreach ($songs as $s) {
                 $folder = $s['folder'];
 
                 // Source badges
@@ -304,12 +283,11 @@ class Plugin implements PluginInterface
                 $lyricUrl = !empty($s['lyricUrl']) ? $s['lyricUrl'] : (!empty($s['lyric']) ? rtrim($options->siteUrl, '/') . '/usr/uploads/music/' . rawurlencode($folder) . '/' . rawurlencode($s['lyric']) : '');
 
                 echo '<tr>';
-                echo '<td style="color:#999;font-size:12px;text-align:center">' . ($s['order'] ?? ($i + 1)) . '</td>';
                 echo '<td style="text-align:left"><strong>' . htmlspecialchars($folder) . '</strong></td>';
                 echo '<td>' . $audioBadge . '</td>';
                 echo '<td>' . $lyricBadge . '</td>';
                 echo '<td>' . $coverBadge . '</td>';
-                echo '<td style="text-align:center"><div style="display:flex;gap:4px;justify-content:center;align-items:center">';
+                echo '<td style="text-align:center"><div style="display:flex;gap:8px;justify-content:center;align-items:center">';
                 if ($playUrl) {
                     $playData = htmlspecialchars(
                         json_encode([$folder, $playUrl, $coverUrl, $lyricUrl], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
@@ -318,20 +296,6 @@ class Plugin implements PluginInterface
                     echo '<button type="button" class="btn btn-xs" onclick="mpPlay(' . $playData . ')" style="cursor:pointer;white-space:nowrap">试听</button>';
                 }
                 echo '<a href="' . htmlspecialchars($pageUrl . '&edit=' . rawurlencode($folder), ENT_QUOTES, 'UTF-8') . '" class="btn btn-xs" style="text-decoration:none;white-space:nowrap;line-height:1;display:inline-flex;align-items:center">编辑</a>';
-                // Move up (disabled for first item)
-                echo '<form method="post" action="' . $pageUrl . '" style="display:inline">';
-                echo '<input type="hidden" name="_" value="' . $security->getToken($options->request->getRequestUrl()) . '">';
-                echo '<input type="hidden" name="mp-action" value="move_up">';
-                echo '<input type="hidden" name="folder" value="' . htmlspecialchars($folder) . '">';
-                echo '<button type="submit" class="btn btn-xs" style="padding:0 4px;font-size:13px;line-height:1.4;cursor:pointer" ' . ($i === 0 ? 'disabled' : '') . ' title="上移">⬆</button>';
-                echo '</form>';
-                // Move down (disabled for last item)
-                echo '<form method="post" action="' . $pageUrl . '" style="display:inline">';
-                echo '<input type="hidden" name="_" value="' . $security->getToken($options->request->getRequestUrl()) . '">';
-                echo '<input type="hidden" name="mp-action" value="move_down">';
-                echo '<input type="hidden" name="folder" value="' . htmlspecialchars($folder) . '">';
-                echo '<button type="submit" class="btn btn-xs" style="padding:0 4px;font-size:13px;line-height:1.4;cursor:pointer" ' . ($i === $songCount - 1 ? 'disabled' : '') . ' title="下移">⬇</button>';
-                echo '</form>';
                 echo '<form method="post" action="' . $pageUrl . '" style="display:inline" onsubmit="return confirm(\'确定删除「' . htmlspecialchars($folder) . '」吗？\')">';
                 echo '<input type="hidden" name="_" value="' . $security->getToken($options->request->getRequestUrl()) . '">';
                 echo '<input type="hidden" name="mp-action" value="delete">';
@@ -601,20 +565,6 @@ var _mpP=null;function mpPlay(d){var e=document.getElementById("mp-player");e.st
             }
         }
 
-        // Assign order to new songs (no order yet, e.g. freshly scanned or created)
-        $maxOrder = 0;
-        foreach ($songs as $data) {
-            if (!empty($data['order']) && $data['order'] > $maxOrder) {
-                $maxOrder = $data['order'];
-            }
-        }
-        foreach ($songs as &$data) {
-            if (!isset($data['order']) || $data['order'] === '' || $data['order'] === null) {
-                $data['order'] = ++$maxOrder;
-            }
-        }
-        unset($data);
-
         if (!is_dir(self::getMusicDir())) {
             @mkdir(self::getMusicDir(), 0755, true);
         }
@@ -744,51 +694,6 @@ var _mpP=null;function mpPlay(d){var e=document.getElementById("mp-player");e.st
         unset($songs[$folder]);
         self::writeCache($songs, false);   // false = don't resurrect external-link songs
         return !is_dir($path);
-    }
-
-    /**
-     * Move a song up or down in the order.
-     *
-     * @param string $folder Song folder name
-     * @param int $direction -1 = up (decrease order), +1 = down (increase order)
-     */
-    public static function moveSong(string $folder, int $direction): void
-    {
-        $songs = self::getCache();
-        $folders = array_keys($songs);
-        if (!isset($songs[$folder])) {
-            throw new \RuntimeException('歌曲不存在');
-        }
-        $idx = array_search($folder, $folders, true);
-        $targetIdx = $idx + $direction;
-        if ($targetIdx < 0 || $targetIdx >= count($folders)) {
-            return; // Already at edge, nothing to do
-        }
-        $targetFolder = $folders[$targetIdx];
-        // Swap order values
-        $tmpOrder = $songs[$folder]['order'] ?? $idx + 1;
-        $songs[$folder]['order'] = $songs[$targetFolder]['order'] ?? $targetIdx + 1;
-        $songs[$targetFolder]['order'] = $tmpOrder;
-        self::writeCache($songs);
-    }
-
-    /**
-     * Randomly shuffle the order of all songs.
-     */
-    public static function randomizeOrder(): void
-    {
-        $songs = self::getCache();
-        $folders = array_keys($songs);
-        // Fisher-Yates shuffle
-        for ($i = count($folders) - 1; $i > 0; $i--) {
-            $j = random_int(0, $i);
-            [$folders[$i], $folders[$j]] = [$folders[$j], $folders[$i]];
-        }
-        // Reassign order values
-        foreach ($folders as $pos => $f) {
-            $songs[$f]['order'] = $pos + 1;
-        }
-        self::writeCache($songs);
     }
 
     private static function sanitizeFilename(string $name): string
