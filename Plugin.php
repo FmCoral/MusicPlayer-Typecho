@@ -528,7 +528,15 @@ var _mpP=null;function mpPlay(d){var e=document.getElementById("mp-player");e.st
         return self::$cache;
     }
 
-    public static function writeCache(array $songs): void
+    /**
+     * Write cache to disk.
+     *
+     * @param array $songs Song data array
+     * @param bool $preserveExternal When true, re-add pure external-link songs that exist
+     *                               in the old cache but are missing from $songs.
+     *                               Pass false only when intentionally deleting a song.
+     */
+    public static function writeCache(array $songs, bool $preserveExternal = true): void
     {
         $existing = self::getCache();
         $preserveKeys = ['audioUrl', 'lyricUrl', 'coverUrl'];
@@ -545,9 +553,11 @@ var _mpP=null;function mpPlay(d){var e=document.getElementById("mp-player");e.st
         unset($data);
 
         // Preserve pure external-link songs not found by scan
-        foreach ($existing as $folder => $data) {
-            if (!isset($songs[$folder]) && !empty($data['audioUrl'])) {
-                $songs[$folder] = $data;
+        if ($preserveExternal) {
+            foreach ($existing as $folder => $data) {
+                if (!isset($songs[$folder]) && !empty($data['audioUrl'])) {
+                    $songs[$folder] = $data;
+                }
             }
         }
 
@@ -678,7 +688,7 @@ var _mpP=null;function mpPlay(d){var e=document.getElementById("mp-player");e.st
 
         $songs = self::getCache();
         unset($songs[$folder]);
-        self::writeCache($songs);
+        self::writeCache($songs, false);   // false = don't resurrect external-link songs
         return !is_dir($path);
     }
 
