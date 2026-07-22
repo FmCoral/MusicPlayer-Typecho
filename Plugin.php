@@ -7,7 +7,7 @@
  *
  * @package MusicPlayer
  * @author FmCoral
- * @version 1.0
+ * @version 1.1
  * @link https://github.com/FmCoral
  */
 
@@ -213,6 +213,7 @@ class Plugin implements PluginInterface
         echo '<table class="typecho-list-table">';
         echo '<tr><td style="width:100px"><label>文件夹名 *</label></td>'
            . '<td><input type="text" name="folderName" required placeholder="如：晴天" style="width:60%"></td></tr>';
+        echo '<tr><td>🎤 歌手</td><td><input type="text" name="artist" placeholder="FmCoral（留空则默认）" style="width:60%"></td></tr>';
 
         // Audio (no skip option)
         echo '<tr><td>🎵 音频</td><td>';
@@ -321,7 +322,9 @@ class Plugin implements PluginInterface
                 echo '<input type="hidden" name="_" value="' . $security->getToken($options->request->getRequestUrl()) . '">';
                 echo '<input type="hidden" name="mp-action" value="edit_save">';
                 echo '<input type="hidden" name="originalFolder" value="' . htmlspecialchars($folder) . '">';
+                $artistVal = htmlspecialchars($s['artist'] ?? '', ENT_QUOTES, 'UTF-8');
                 echo '<div style="margin-bottom:12px"><label style="font-weight:600;font-size:13px">📁 歌曲名称</label> <input type="text" name="folderName" value="' . htmlspecialchars($folder) . '" style="width:100%;margin-top:4px;box-sizing:border-box"></div>';
+                echo '<div style="margin-bottom:12px"><label style="font-weight:600;font-size:13px">🎤 歌手</label> <input type="text" name="artist" value="' . $artistVal . '" placeholder="FmCoral（留空则默认）" style="width:100%;margin-top:4px;box-sizing:border-box"></div>';
                 echo '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">';
 
                 // Audio
@@ -335,23 +338,23 @@ class Plugin implements PluginInterface
                 echo '</fieldset>';
 
                 // Lyric
-                $lyricMode = !empty($s['lyricUrl']) ? 'url' : (!empty($s['lyric']) ? 'upload' : 'skip');
+                $lyricMode = !empty($s['lyricUrl']) ? 'url' : (!empty($s['lyric']) ? 'upload' : 'none');
                 echo '<fieldset style="border:1px solid #e8e8e8;border-radius:4px;padding:10px 12px">';
                 echo '<legend style="font-weight:600;font-size:13px">📝 歌词</legend>';
                 echo '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="edit_lyricMode" value="upload"' . ($lyricMode === 'upload' ? ' checked' : '') . ' onclick="mpToggle(\'e-lyric\',this.value)"> 本地</label>';
                 echo '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="edit_lyricMode" value="url"' . ($lyricMode === 'url' ? ' checked' : '') . ' onclick="mpToggle(\'e-lyric\',this.value)"> 外链</label>';
-                echo '<label style="cursor:pointer"><input type="radio" name="edit_lyricMode" value="skip"' . ($lyricMode === 'skip' ? ' checked' : '') . ' onclick="mpToggle(\'e-lyric\',this.value)"> 跳过</label>';
+                echo '<label style="cursor:pointer"><input type="radio" name="edit_lyricMode" value="none"' . ($lyricMode === 'none' ? ' checked' : '') . ' onclick="mpToggle(\'e-lyric\',this.value)"> 清除</label>';
                 echo '<div id="e-lyric-upload"' . ($lyricMode === 'upload' ? '' : ' style="display:none"') . '><input type="file" name="lyric" accept=".lrc" style="margin-top:6px;width:100%"></div>';
                 echo '<div id="e-lyric-url"' . ($lyricMode === 'url' ? '' : ' style="display:none"') . '><input type="url" name="edit_lyricUrl" value="' . htmlspecialchars($s['lyricUrl'] ?? '') . '" placeholder="https://" style="margin-top:6px;width:100%"></div>';
                 echo '</fieldset>';
 
                 // Cover
-                $coverMode = !empty($s['coverUrl']) ? 'url' : (!empty($s['cover']) ? 'upload' : 'skip');
+                $coverMode = !empty($s['coverUrl']) ? 'url' : (!empty($s['cover']) ? 'upload' : 'none');
                 echo '<fieldset style="border:1px solid #e8e8e8;border-radius:4px;padding:10px 12px">';
                 echo '<legend style="font-weight:600;font-size:13px">🖼 封面</legend>';
                 echo '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="edit_coverMode" value="upload"' . ($coverMode === 'upload' ? ' checked' : '') . ' onclick="mpToggle(\'e-cover\',this.value)"> 本地</label>';
                 echo '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="edit_coverMode" value="url"' . ($coverMode === 'url' ? ' checked' : '') . ' onclick="mpToggle(\'e-cover\',this.value)"> 外链</label>';
-                echo '<label style="cursor:pointer"><input type="radio" name="edit_coverMode" value="skip"' . ($coverMode === 'skip' ? ' checked' : '') . ' onclick="mpToggle(\'e-cover\',this.value)"> 跳过</label>';
+                echo '<label style="cursor:pointer"><input type="radio" name="edit_coverMode" value="none"' . ($coverMode === 'none' ? ' checked' : '') . ' onclick="mpToggle(\'e-cover\',this.value)"> 清除</label>';
                 echo '<div id="e-cover-upload"' . ($coverMode === 'upload' ? '' : ' style="display:none"') . '><input type="file" name="cover" accept=".jpg,.jpeg,.png,.gif,.webp" style="margin-top:6px;width:100%"></div>';
                 echo '<div id="e-cover-url"' . ($coverMode === 'url' ? '' : ' style="display:none"') . '><input type="url" name="edit_coverUrl" value="' . htmlspecialchars($s['coverUrl'] ?? '') . '" placeholder="https://" style="margin-top:6px;width:100%"></div>';
                 echo '</fieldset>';
@@ -448,11 +451,12 @@ var _mpP=null;function mpPlay(d){var e=document.getElementById("mp-player");e.st
                 $base = rtrim(\Widget\Options::alloc()->siteUrl, '/') . '/usr/uploads/music/' . rawurlencode($folder) . '/';
 
                 self::$playerConfigs[] = [
-                    'id'    => $id,
-                    'name'  => $folder,
-                    'url'   => !empty($song['audioUrl']) ? $song['audioUrl'] : $base . rawurlencode($song['audio'][0]),
-                    'lyric' => !empty($song['lyricUrl']) ? $song['lyricUrl'] : (!empty($song['lyric']) ? $base . rawurlencode($song['lyric']) : null),
-                    'cover' => !empty($song['coverUrl']) ? $song['coverUrl'] : (!empty($song['cover']) ? $base . rawurlencode($song['cover']) : null),
+                    'id'     => $id,
+                    'name'   => $folder,
+                    'artist' => $song['artist'] ?? '',
+                    'url'    => !empty($song['audioUrl']) ? $song['audioUrl'] : $base . rawurlencode($song['audio'][0]),
+                    'lyric'  => !empty($song['lyricUrl']) ? $song['lyricUrl'] : (!empty($song['lyric']) ? $base . rawurlencode($song['lyric']) : null),
+                    'cover'  => !empty($song['coverUrl']) ? $song['coverUrl'] : (!empty($song['cover']) ? $base . rawurlencode($song['cover']) : null),
                 ];
 
                 return '<div class="music-player" id="' . $id . '"></div>';
@@ -475,11 +479,11 @@ var _mpP=null;function mpPlay(d){var e=document.getElementById("mp-player");e.st
         $autoplay = ($cfg->autoplay ?? '0') === '1';
 
         echo '<link rel="stylesheet" href="' . $pluginUrl . '/APlayer.min.css">';
-        echo '<style>.aplayer-author{display:none!important}</style>';
         echo '<script src="' . $pluginUrl . '/APlayer.min.js"></script>';
         echo '<script>';
         foreach (self::$playerConfigs as $p) {
-            $audio = ['name' => $p['name'], 'url' => $p['url']];
+            $artist = !empty($p['artist']) ? $p['artist'] : 'FmCoral';
+            $audio = ['name' => $p['name'], 'artist' => $artist, 'url' => $p['url']];
             if ($p['cover']) $audio['cover'] = $p['cover'];
             elseif ($defaultCover) $audio['cover'] = $defaultCover;
             if ($p['lyric']) $audio['lrc'] = $p['lyric'];
@@ -492,7 +496,6 @@ var _mpP=null;function mpPlay(d){var e=document.getElementById("mp-player");e.st
                 . 'lrcType:' . ($p['lyric'] ? 3 : 0) . ','
                 . 'autoplay:' . ($autoplay ? 'true' : 'false')
                 . '});'
-                . 'var _a=_c.querySelector(".aplayer-author");if(_a)_a.style.display="none"'
                 . '})();';
         }
         echo '</script>';
@@ -539,11 +542,17 @@ var _mpP=null;function mpPlay(d){var e=document.getElementById("mp-player");e.st
     public static function writeCache(array $songs, bool $preserveExternal = true): void
     {
         $existing = self::getCache();
-        $preserveKeys = ['audioUrl', 'lyricUrl', 'coverUrl'];
+        $preserveKeys = ['audioUrl', 'lyricUrl', 'coverUrl', 'artist'];
 
         foreach ($songs as $folder => &$data) {
             if (isset($existing[$folder])) {
                 foreach ($preserveKeys as $key) {
+                    // If user explicitly cleared this field, don't restore old value
+                    $clearKey = '__' . $key . '_clear';
+                    if (!empty($data[$clearKey])) {
+                        unset($data[$clearKey]);
+                        continue;
+                    }
                     if (!empty($existing[$folder][$key])) {
                         $data[$key] = $existing[$folder][$key];
                     }
@@ -670,9 +679,18 @@ var _mpP=null;function mpPlay(d){var e=document.getElementById("mp-player");e.st
             $songs[$folder] = ['audio' => [], 'lyric' => null, 'cover' => null];
         }
 
-        $songs[$folder]['audioUrl'] = ($data['audioMode'] ?? '') === 'url' ? trim($data['audioUrl'] ?? '') : '';
-        $songs[$folder]['lyricUrl'] = ($data['lyricMode'] ?? '') === 'url' ? trim($data['lyricUrl'] ?? '') : '';
-        $songs[$folder]['coverUrl'] = ($data['coverMode'] ?? '') === 'url' ? trim($data['coverUrl'] ?? '') : '';
+        $audioMode = $data['audioMode'] ?? '';
+        $lyricMode = $data['lyricMode'] ?? '';
+        $coverMode = $data['coverMode'] ?? '';
+
+        $songs[$folder]['audioUrl'] = $audioMode === 'url' ? trim($data['audioUrl'] ?? '') : '';
+        $songs[$folder]['lyricUrl'] = $lyricMode === 'url' ? trim($data['lyricUrl'] ?? '') : '';
+        $songs[$folder]['coverUrl'] = $coverMode === 'url' ? trim($data['coverUrl'] ?? '') : '';
+        $songs[$folder]['artist'] = trim($data['artist'] ?? '');
+
+        // Mark explicitly cleared fields so writeCache() won't restore old values
+        if ($lyricMode === 'none') $songs[$folder]['__lyricUrl_clear'] = true;
+        if ($coverMode === 'none') $songs[$folder]['__coverUrl_clear'] = true;
 
         self::writeCache($songs);
         return $songs[$folder];
