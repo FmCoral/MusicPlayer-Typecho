@@ -1,14 +1,12 @@
 <?php
 /**
- * MusicPlayer — APlayer-based music player for Typecho.
- *
- * Insert [music]foldername[/music] in articles to embed a player.
- * Music files go into usr/uploads/music/, one folder per song.
+ * 在文章内插入 [music]文件夹名[/music] 标签，即可嵌入音乐播放器。
+ * 音乐文件将放入 usr/uploads/music/, 每个文件夹对应一首音乐。
  *
  * @package MusicPlayer
  * @author FmCoral
- * @version 1.1
- * @link https://github.com/FmCoral
+ * @version 1.2
+ * @link https://github.com/FmCoral/MusicPlayer-Typecho
  */
 
 namespace TypechoPlugin\MusicPlayer;
@@ -53,12 +51,18 @@ class Plugin implements PluginInterface
             @unlink($oldCache);
         }
 
-        return _t('MusicPlayer 已激活，将音乐放入 usr/uploads/music/ 后到插件设置页刷新缓存');
+        // Register admin panel: 管理 → 音乐
+        \Utils\Helper::addPanel(3, 'MusicPlayer/pages/manage-music.php', '音乐', '管理音乐', 'administrator');
+
+        return _t('MusicPlayer 已激活，将音乐放入 usr/uploads/music/ 后到管理 → 音乐 刷新缓存');
     }
 
     public static function deactivate(): string
     {
-        // Clean up legacy standalone menu entries
+        // Remove admin panel: 管理 → 音乐
+        \Utils\Helper::removePanel(3, 'MusicPlayer/pages/manage-music.php');
+
+        // Clean up legacy standalone menu entries (from very old versions)
         $panelTable = \Utils\Helper::options()->panelTable;
         if (!empty($panelTable['parent'])) {
             foreach ($panelTable['parent'] as $key => $name) {
@@ -73,329 +77,17 @@ class Plugin implements PluginInterface
     }
 
     /**
-     * Plugin settings page: song management on top, player config below.
+     * Plugin settings page: player configuration only.
+     * Song management moved to 管理 → 音乐.
      */
     public static function config(Form $form): void
     {
-        // Use alloc() instead of global to work when Edit widget calls config() on activation
-        $options = \Widget\Options::alloc();
-        $security = \Typecho\Widget::widget('Widget\Security');
-
-        // Current page URL used as form action
-        $pageUrl = $options->adminUrl . 'options-plugin.php?config=MusicPlayer';
-
-        // ── Handle POST actions ──
-        if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mp-action'])) {
-            try {
-                $security->protect();
-
-                switch ($_POST['mp-action']) {
-                    case 'refresh':
-                        $songs = self::scanMusicDir();
-                        self::writeCache($songs);
-                        $msg = '缓存已更新，共 ' . count($songs) . ' 首歌曲';
-                        break;
-
-                    case 'create':
-                        $folder = self::sanitizeFolderName($_POST['folderName'] ?? '');
-                        if ($folder === '') throw new \RuntimeException('请输入有效的文件夹名');
-
-                        $audioMode = $_POST['audioMode'] ?? 'upload';
-                        if ($audioMode === 'upload') {
-                            self::checkUploadError($_FILES['audio'] ?? [], '音频');
-                        }
-
-                        self::createOrUpdateSong($folder, $_POST, $_FILES);
-                        $msg = '歌曲「' . $folder . '」已创建';
-                        break;
-
-                    case 'delete':
-                        $folder = trim($_POST['folder'] ?? '');
-                        if ($folder === '') throw new \RuntimeException('未指定歌曲');
-                        self::deleteSongFolder($folder);
-                        $msg = '歌曲「' . $folder . '」已删除';
-                        break;
-
-                    case 'edit_save':
-                        $originalFolder = trim($_POST['originalFolder'] ?? '');
-                        $newFolder = self::sanitizeFolderName($_POST['folderName'] ?? '');
-                        if ($newFolder === '' || $originalFolder === '') {
-                            throw new \RuntimeException('无效的歌曲名称');
-                        }
-                        $allSongs = self::getCache();
-                        if (!isset($allSongs[$originalFolder])) {
-                            throw new \RuntimeException('歌曲不存在');
-                        }
-
-                        // Rename folder
-                        if ($newFolder !== $originalFolder) {
-                            if (isset($allSongs[$newFolder])) {
-                                throw new \RuntimeException('歌曲「' . $newFolder . '」已存在');
-                            }
-                            $oldPath = self::getMusicDir() . '/' . $originalFolder;
-                            $newPath = self::getMusicDir() . '/' . $newFolder;
-                            if (is_dir($oldPath)) {
-                                if (!rename($oldPath, $newPath)) {
-                                    throw new \RuntimeException('无法重命名文件夹');
-                                }
-                            } elseif (!is_dir($newPath)) {
-                                @mkdir($newPath, 0755, true);
-                            }
-                            // Migrate cache entry
-                            $allSongs[$newFolder] = $allSongs[$originalFolder];
-                            unset($allSongs[$originalFolder]);
-                            self::writeCache($allSongs);
-                        }
-
-                        // Remap prefixed form fields (edit_) to standard names
-                        $_POST['audioMode'] = $_POST['edit_audioMode'] ?? 'upload';
-                        $_POST['lyricMode'] = $_POST['edit_lyricMode'] ?? 'skip';
-                        $_POST['coverMode'] = $_POST['edit_coverMode'] ?? 'skip';
-                        $_POST['audioUrl']  = $_POST['edit_audioUrl'] ?? '';
-                        $_POST['lyricUrl']  = $_POST['edit_lyricUrl'] ?? '';
-                        $_POST['coverUrl']  = $_POST['edit_coverUrl'] ?? '';
-                        self::createOrUpdateSong($newFolder, $_POST, $_FILES);
-                        $msg = '歌曲「' . $newFolder . '」已更新';
-                        break;
-                }
-
-                header('Location: ' . $pageUrl . '&mp_msg=' . urlencode($msg ?? '') . '&mp_status=success');
-                exit;
-
-            } catch (\Throwable $e) {
-                header('Location: ' . $pageUrl . '&mp_msg=' . urlencode($e->getMessage()) . '&mp_status=error');
-                exit;
-            }
-        }
-
-        // ── Show redirect flash messages ──
-        $mpStatus = $_GET['mp_status'] ?? '';
-        $mpMsg = $_GET['mp_msg'] ?? '';
-        if ($mpMsg) {
-            $cls = $mpStatus === 'success' ? 'success' : 'error';
-            echo '<div class="message ' . $cls . '">' . htmlspecialchars(urldecode($mpMsg)) . '</div>';
-        }
-
-        // ── Read cache ──
-        $cache = self::getCache();
-        $musicDir = self::getMusicDir();
-        $hasDir = is_dir($musicDir);
-        $cacheFile = self::getCacheFilePath();
-        $cacheTime = file_exists($cacheFile) ? date('Y-m-d H:i:s', filemtime($cacheFile)) : '尚未生成';
-
-        // ── Admin UI ──
-        echo '<style>.typecho-page-main>.col-tb-8{flex:0 0 100%;max-width:100%;margin-left:0}</style>';
-        echo '<div class="mp-admin" style="margin-bottom:24px">';
-
-        // Status bar
-        echo '<div style="background:#f5f5f5;padding:10px 14px;border-radius:4px;margin-bottom:16px">';
-        echo '<strong>缓存状态：</strong>共 <strong>' . count($cache) . '</strong> 首 &nbsp;|&nbsp; '
-           . '更新：' . $cacheTime . ' &nbsp;|&nbsp; '
-           . '目录：<code>' . $musicDir . '</code>'
-           . ($hasDir ? '' : ' <span style="color:#c33">（不存在）</span>');
+        // 提示用户前往管理页
+        echo '<div style="background:#f5f5f5;padding:12px 16px;border-radius:4px;margin-bottom:16px">';
+        echo '🎵 添加/编辑/删除歌曲已移至 <a href="'
+           . \Utils\Helper::options()->adminUrl . 'extending.php?panel=' . urlencode('MusicPlayer/pages/manage-music.php')
+           . '" style="font-weight:600;text-decoration:underline">管理 → 音乐</a>';
         echo '</div>';
-
-        // Refresh cache button
-        echo '<form method="post" action="' . $pageUrl . '" style="margin-bottom:16px">';
-        echo '<input type="hidden" name="_" value="' . $security->getToken($options->request->getRequestUrl()) . '">';
-        echo '<input type="hidden" name="mp-action" value="refresh">';
-        echo '<button type="submit" class="btn primary">🔄 刷新缓存</button>';
-        echo ' <span class="description">扫描目录，保留已有外链</span>';
-        echo '</form>';
-
-        // ── New song form ──
-        echo '<details style="margin-bottom:16px;border:1px solid #e9e9e9;border-radius:4px;padding:12px 14px" open>';
-        echo '<summary style="cursor:pointer;font-weight:bold;font-size:14px">➕ 新增歌曲</summary>';
-        echo '<form method="post" action="' . $pageUrl . '" enctype="multipart/form-data" style="margin-top:10px">';
-        echo '<input type="hidden" name="_" value="' . $security->getToken($options->request->getRequestUrl()) . '">';
-        echo '<input type="hidden" name="mp-action" value="create">';
-
-        echo '<table class="typecho-list-table">';
-        echo '<tr><td style="width:100px"><label>文件夹名 *</label></td>'
-           . '<td><input type="text" name="folderName" required placeholder="如：晴天" style="width:60%"></td></tr>';
-        echo '<tr><td>🎤 歌手</td><td><input type="text" name="artist" placeholder="FmCoral（留空则默认）" style="width:60%"></td></tr>';
-
-        // Audio (no skip option)
-        echo '<tr><td>🎵 音频</td><td>';
-        echo '<label style="margin-right:12px;cursor:pointer"><input type="radio" name="audioMode" value="upload" checked onclick="mpToggle(\'c-audio\',this.value)"> 上传文件</label>';
-        echo '<label style="cursor:pointer"><input type="radio" name="audioMode" value="url" onclick="mpToggle(\'c-audio\',this.value)"> 外链</label>';
-        echo '<div id="c-audio-upload" style="margin-top:6px"><input type="file" name="audio" accept=".mp3,.flac,.ogg,.wav,.aac,.m4a,.wma"></div>';
-        echo '<div id="c-audio-url" style="margin-top:6px;display:none"><input type="url" name="audioUrl" placeholder="https://example.com/song.mp3" style="width:90%"></div>';
-        echo '</td></tr>';
-
-        // Lyric
-        echo '<tr><td>📝 歌词</td><td>';
-        echo '<label style="margin-right:12px;cursor:pointer"><input type="radio" name="lyricMode" value="upload" onclick="mpToggle(\'c-lyric\',this.value)"> 上传文件</label>';
-        echo '<label style="margin-right:12px;cursor:pointer"><input type="radio" name="lyricMode" value="url" onclick="mpToggle(\'c-lyric\',this.value)"> 外链</label>';
-        echo '<label style="cursor:pointer"><input type="radio" name="lyricMode" value="skip" checked onclick="mpToggle(\'c-lyric\',this.value)"> 跳过</label>';
-        echo '<div id="c-lyric-upload" style="margin-top:6px;display:none"><input type="file" name="lyric" accept=".lrc"></div>';
-        echo '<div id="c-lyric-url" style="margin-top:6px;display:none"><input type="url" name="lyricUrl" placeholder="https://example.com/lyric.lrc" style="width:90%"></div>';
-        echo '</td></tr>';
-
-        // Cover
-        echo '<tr><td>🖼 封面</td><td>';
-        echo '<label style="margin-right:12px;cursor:pointer"><input type="radio" name="coverMode" value="upload" onclick="mpToggle(\'c-cover\',this.value)"> 上传文件</label>';
-        echo '<label style="margin-right:12px;cursor:pointer"><input type="radio" name="coverMode" value="url" onclick="mpToggle(\'c-cover\',this.value)"> 外链</label>';
-        echo '<label style="cursor:pointer"><input type="radio" name="coverMode" value="skip" checked onclick="mpToggle(\'c-cover\',this.value)"> 跳过</label>';
-        echo '<div id="c-cover-upload" style="margin-top:6px;display:none"><input type="file" name="cover" accept=".jpg,.jpeg,.png,.gif,.webp"></div>';
-        echo '<div id="c-cover-url" style="margin-top:6px;display:none"><input type="url" name="coverUrl" placeholder="https://example.com/cover.jpg" style="width:90%"></div>';
-        echo '</td></tr>';
-
-        echo '</table>';
-        echo '<button type="submit" class="btn primary" style="margin-top:8px">⬆ 创建</button>';
-        echo '</form></details>';
-
-        // ── Song list + edit modal ──
-        $songs = [];
-        if (count($cache) > 0) {
-            foreach ($cache as $folder => $info) {
-                $songs[] = $info + ['folder' => $folder];
-            }
-            usort($songs, fn($a, $b) => strcmp($a['folder'], $b['folder']));
-        }
-
-        $editFolder = $_GET['edit'] ?? '';
-
-        echo '<h4 style="margin:0 0 8px">📋 歌曲列表</h4>';
-
-        if (empty($songs)) {
-            echo '<p style="color:#999">暂无歌曲</p>';
-        } else {
-            echo '<div class="typecho-table-wrap">';
-            echo '<table class="typecho-list-table">';
-            echo '<thead><tr><th style="text-align:left">歌曲名称</th><th>音频来源</th><th>歌词来源</th><th>封面来源</th><th style="text-align:center">操作</th></tr></thead><tbody>';
-
-            foreach ($songs as $s) {
-                $folder = $s['folder'];
-
-                // Source badges
-                $audioBadge = !empty($s['audioUrl']) ? '<span style="color:#467fcf">🌐 外链</span>' : (!empty($s['audio']) ? '📁 本地' : '<span style="color:#c33">✕ 无</span>');
-                $lyricBadge = !empty($s['lyricUrl']) ? '<span style="color:#467fcf">🌐 外链</span>' : (!empty($s['lyric']) ? '📁 本地' : '<span style="color:#999">— 无</span>');
-                $coverBadge = !empty($s['coverUrl']) ? '<span style="color:#467fcf">🌐 外链</span>' : (!empty($s['cover']) ? '📁 本地' : '<span style="color:#999">— 无</span>');
-
-                // Build play / cover / lyric URLs
-                $playUrl = '';
-                if (!empty($s['audioUrl'])) {
-                    $playUrl = $s['audioUrl'];
-                } elseif (!empty($s['audio'])) {
-                    $playUrl = rtrim($options->siteUrl, '/') . '/usr/uploads/music/' . rawurlencode($folder) . '/' . rawurlencode($s['audio'][0]);
-                }
-                $coverUrl = !empty($s['coverUrl']) ? $s['coverUrl'] : (!empty($s['cover']) ? rtrim($options->siteUrl, '/') . '/usr/uploads/music/' . rawurlencode($folder) . '/' . rawurlencode($s['cover']) : '');
-                $lyricUrl = !empty($s['lyricUrl']) ? $s['lyricUrl'] : (!empty($s['lyric']) ? rtrim($options->siteUrl, '/') . '/usr/uploads/music/' . rawurlencode($folder) . '/' . rawurlencode($s['lyric']) : '');
-
-                echo '<tr>';
-                echo '<td style="text-align:left"><strong>' . htmlspecialchars($folder) . '</strong></td>';
-                echo '<td>' . $audioBadge . '</td>';
-                echo '<td>' . $lyricBadge . '</td>';
-                echo '<td>' . $coverBadge . '</td>';
-                echo '<td style="text-align:center"><div style="display:flex;gap:8px;justify-content:center;align-items:center">';
-                if ($playUrl) {
-                    $playData = htmlspecialchars(
-                        json_encode([$folder, $playUrl, $coverUrl, $lyricUrl], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                        ENT_QUOTES, 'UTF-8'
-                    );
-                    echo '<button type="button" class="btn btn-xs" onclick="mpPlay(' . $playData . ')" style="cursor:pointer;white-space:nowrap">试听</button>';
-                }
-                echo '<a href="' . htmlspecialchars($pageUrl . '&edit=' . rawurlencode($folder), ENT_QUOTES, 'UTF-8') . '" class="btn btn-xs" style="text-decoration:none;white-space:nowrap;line-height:1;display:inline-flex;align-items:center">编辑</a>';
-                echo '<form method="post" action="' . $pageUrl . '" style="display:inline" onsubmit="return confirm(\'确定删除「' . htmlspecialchars($folder) . '」吗？\')">';
-                echo '<input type="hidden" name="_" value="' . $security->getToken($options->request->getRequestUrl()) . '">';
-                echo '<input type="hidden" name="mp-action" value="delete">';
-                echo '<input type="hidden" name="folder" value="' . htmlspecialchars($folder) . '">';
-                echo '<button type="submit" class="btn btn-xs" style="color:#c33;white-space:nowrap">删除</button>';
-                echo '</form>';
-                echo '</div></td>';
-                echo '</tr>';
-            }
-
-            echo '</tbody></table></div>';
-            echo '<p class="description">使用 <code>[music]文件夹名[/music]</code> 在文章中插入音乐</p>';
-
-            // ── Edit modal ──
-            if ($editFolder !== '' && isset($cache[$editFolder])) {
-                $s = $cache[$editFolder];
-                $folder = $editFolder;
-
-                echo '<div id="mp-modal" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center">';
-                echo '<div style="background:#fff;border-radius:8px;padding:24px;max-width:720px;width:92%;max-height:85vh;overflow-y:auto;box-shadow:0 8px 30px rgba(0,0,0,0.2)">';
-                echo '<h3 style="margin:0 0 14px;font-size:16px">✏ 编辑歌曲 — ' . htmlspecialchars($folder) . '</h3>';
-                echo '<form method="post" action="' . $pageUrl . '" enctype="multipart/form-data">';
-                echo '<input type="hidden" name="_" value="' . $security->getToken($options->request->getRequestUrl()) . '">';
-                echo '<input type="hidden" name="mp-action" value="edit_save">';
-                echo '<input type="hidden" name="originalFolder" value="' . htmlspecialchars($folder) . '">';
-                $artistVal = htmlspecialchars($s['artist'] ?? '', ENT_QUOTES, 'UTF-8');
-                echo '<div style="margin-bottom:12px"><label style="font-weight:600;font-size:13px">📁 歌曲名称</label> <input type="text" name="folderName" value="' . htmlspecialchars($folder) . '" style="width:100%;margin-top:4px;box-sizing:border-box"></div>';
-                echo '<div style="margin-bottom:12px"><label style="font-weight:600;font-size:13px">🎤 歌手</label> <input type="text" name="artist" value="' . $artistVal . '" placeholder="FmCoral（留空则默认）" style="width:100%;margin-top:4px;box-sizing:border-box"></div>';
-                echo '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">';
-
-                // Audio
-                $audioMode = !empty($s['audioUrl']) ? 'url' : 'upload';
-                echo '<fieldset style="border:1px solid #e8e8e8;border-radius:4px;padding:10px 12px">';
-                echo '<legend style="font-weight:600;font-size:13px">🎵 音频</legend>';
-                echo '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="edit_audioMode" value="upload"' . ($audioMode === 'upload' ? ' checked' : '') . ' onclick="mpToggle(\'e-audio\',this.value)"> 本地</label>';
-                echo '<label style="cursor:pointer"><input type="radio" name="edit_audioMode" value="url"' . ($audioMode === 'url' ? ' checked' : '') . ' onclick="mpToggle(\'e-audio\',this.value)"> 外链</label>';
-                echo '<div id="e-audio-upload"' . ($audioMode === 'upload' ? '' : ' style="display:none"') . '><input type="file" name="audio" accept=".mp3,.flac,.ogg,.wav,.aac,.m4a,.wma" style="margin-top:6px;width:100%"></div>';
-                echo '<div id="e-audio-url"' . ($audioMode === 'url' ? '' : ' style="display:none"') . '><input type="url" name="edit_audioUrl" value="' . htmlspecialchars($s['audioUrl'] ?? '') . '" placeholder="https://" style="margin-top:6px;width:100%"></div>';
-                echo '</fieldset>';
-
-                // Lyric
-                $lyricMode = !empty($s['lyricUrl']) ? 'url' : (!empty($s['lyric']) ? 'upload' : 'none');
-                echo '<fieldset style="border:1px solid #e8e8e8;border-radius:4px;padding:10px 12px">';
-                echo '<legend style="font-weight:600;font-size:13px">📝 歌词</legend>';
-                echo '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="edit_lyricMode" value="upload"' . ($lyricMode === 'upload' ? ' checked' : '') . ' onclick="mpToggle(\'e-lyric\',this.value)"> 本地</label>';
-                echo '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="edit_lyricMode" value="url"' . ($lyricMode === 'url' ? ' checked' : '') . ' onclick="mpToggle(\'e-lyric\',this.value)"> 外链</label>';
-                echo '<label style="cursor:pointer"><input type="radio" name="edit_lyricMode" value="none"' . ($lyricMode === 'none' ? ' checked' : '') . ' onclick="mpToggle(\'e-lyric\',this.value)"> 清除</label>';
-                echo '<div id="e-lyric-upload"' . ($lyricMode === 'upload' ? '' : ' style="display:none"') . '><input type="file" name="lyric" accept=".lrc" style="margin-top:6px;width:100%"></div>';
-                echo '<div id="e-lyric-url"' . ($lyricMode === 'url' ? '' : ' style="display:none"') . '><input type="url" name="edit_lyricUrl" value="' . htmlspecialchars($s['lyricUrl'] ?? '') . '" placeholder="https://" style="margin-top:6px;width:100%"></div>';
-                echo '</fieldset>';
-
-                // Cover
-                $coverMode = !empty($s['coverUrl']) ? 'url' : (!empty($s['cover']) ? 'upload' : 'none');
-                echo '<fieldset style="border:1px solid #e8e8e8;border-radius:4px;padding:10px 12px">';
-                echo '<legend style="font-weight:600;font-size:13px">🖼 封面</legend>';
-                echo '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="edit_coverMode" value="upload"' . ($coverMode === 'upload' ? ' checked' : '') . ' onclick="mpToggle(\'e-cover\',this.value)"> 本地</label>';
-                echo '<label style="margin-right:10px;cursor:pointer"><input type="radio" name="edit_coverMode" value="url"' . ($coverMode === 'url' ? ' checked' : '') . ' onclick="mpToggle(\'e-cover\',this.value)"> 外链</label>';
-                echo '<label style="cursor:pointer"><input type="radio" name="edit_coverMode" value="none"' . ($coverMode === 'none' ? ' checked' : '') . ' onclick="mpToggle(\'e-cover\',this.value)"> 清除</label>';
-                echo '<div id="e-cover-upload"' . ($coverMode === 'upload' ? '' : ' style="display:none"') . '><input type="file" name="cover" accept=".jpg,.jpeg,.png,.gif,.webp" style="margin-top:6px;width:100%"></div>';
-                echo '<div id="e-cover-url"' . ($coverMode === 'url' ? '' : ' style="display:none"') . '><input type="url" name="edit_coverUrl" value="' . htmlspecialchars($s['coverUrl'] ?? '') . '" placeholder="https://" style="margin-top:6px;width:100%"></div>';
-                echo '</fieldset>';
-
-                echo '</div>'; // grid
-                echo '<div style="margin-top:14px;display:flex;gap:10px;align-items:center">';
-                echo '<button type="submit" class="btn primary">💾 保存修改</button>';
-                echo '<a href="' . $pageUrl . '" class="btn btn-xs" style="text-decoration:none">✕ 取消</a>';
-                echo '</div>';
-                echo '</form>';
-                echo '</div></div>';
-
-                // Click overlay to close modal
-                echo '<script>document.getElementById("mp-modal").addEventListener("click",function(e){if(e.target===this)window.location.href=' . json_encode($pageUrl, JSON_UNESCAPED_SLASHES) . '})</script>';
-            }
-        }
-
-        // ── Inline player ──
-        $pluginUrl = rtrim($options->pluginUrl, '/') . '/MusicPlayer';
-        try {
-            $savedTheme = $options->plugin('MusicPlayer')->theme ?? '#b7daff';
-        } catch (\Throwable $e) {
-            $savedTheme = '#b7daff';
-        }
-
-        echo '</div>'; // .mp-admin
-
-        echo '<div id="mp-player" style="display:none;margin:16px auto;max-width:500px;min-height:82px"></div>';
-        echo '<link rel="stylesheet" href="' . $pluginUrl . '/APlayer.min.css">';
-        echo '<script src="' . $pluginUrl . '/APlayer.min.js"></script>';
-
-        // ── JS toggle & inline player ──
-        echo '<script>
-function mpToggle(p,m){["upload","url"].forEach(function(k){var e=document.getElementById(p+"-"+k);if(e)e.style.display=k===m?"":"none"})}
-!function(){["audio","lyric","cover"].forEach(function(t){var r=document.querySelector("input[name=\""+t+"Mode\"]:checked");if(r)mpToggle("c-"+t,r.value)})}();
-var _mpP=null;function mpPlay(d){var e=document.getElementById("mp-player");e.style.display="block";if(_mpP)_mpP.destroy();var a={name:d[0],url:d[1]};if(d[2])a.cover=d[2];if(d[3])a.lrc=d[3];_mpP=new APlayer({container:e,audio:a,theme:"' . $savedTheme . '",lrcType:d[3]?3:0});var _a=e.querySelector(".aplayer-author");if(_a)_a.style.display="none"}
-</script>';
-
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        //  Player settings (Typecho standard form)
-        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
         $defaultCover = new Text(
             'defaultCover', null, '',
