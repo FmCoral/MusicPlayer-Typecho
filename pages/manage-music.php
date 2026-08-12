@@ -196,6 +196,11 @@ try {
                         <tr><td style="width:100px"><label>文件夹名 *</label></td>
                             <td><input type="text" name="folderName" required placeholder="如：晴天" style="width:60%"></td></tr>
                         <tr><td>🎤 歌手</td><td><input type="text" name="artist" placeholder="FmCoral（留空则默认）" style="width:60%"></td></tr>
+                        <tr><td>🌐 Emo 页展示</td><td>
+                            <input type="hidden" name="showInEmo" value="0">
+                            <label style="cursor:pointer"><input type="checkbox" name="showInEmo" value="1" checked> 在 Emo 音乐页面展示</label>
+                            <span class="description">取消勾选后不出现在 Emo 页面，文章 [music] 短代码不受影响</span>
+                        </td></tr>
 
                         <!-- 音频 -->
                         <tr><td>🎵 音频</td><td>
@@ -236,7 +241,7 @@ try {
                 <div class="typecho-table-wrap">
                     <table class="typecho-list-table">
                         <thead>
-                            <tr><th style="text-align:left">歌曲名称</th><th>音频来源</th><th>歌词来源</th><th>封面来源</th><th style="text-align:center">操作</th></tr>
+                            <tr><th style="text-align:left">歌曲名称</th><th>音频来源</th><th>歌词来源</th><th>封面来源</th><th style="text-align:center">Emo 页</th><th style="text-align:center">操作</th></tr>
                         </thead>
                         <tbody>
                             <?php foreach ($songs as $s):
@@ -244,6 +249,9 @@ try {
                                 $audioBadge = !empty($s['audioUrl']) ? '<span style="color:#467fcf">🌐 外链</span>' : (!empty($s['audio']) ? '📁 本地' : '<span style="color:#c33">✕ 无</span>');
                                 $lyricBadge = !empty($s['lyricUrl']) ? '<span style="color:#467fcf">🌐 外链</span>' : (!empty($s['lyric']) ? '📁 本地' : '<span style="color:#999">— 无</span>');
                                 $coverBadge = !empty($s['coverUrl']) ? '<span style="color:#467fcf">🌐 外链</span>' : (!empty($s['cover']) ? '📁 本地' : '<span style="color:#999">— 无</span>');
+                                $emoBadge = (isset($s['showInEmo']) ? !empty($s['showInEmo']) : true)
+                                    ? '<span style="color:#5cb85c">✔ 展示</span>'
+                                    : '<span style="color:#999">— 隐藏</span>';
 
                                 // Build play / cover / lyric URLs
                                 $playUrl = '';
@@ -260,6 +268,7 @@ try {
                                 <td><?php echo $audioBadge; ?></td>
                                 <td><?php echo $lyricBadge; ?></td>
                                 <td><?php echo $coverBadge; ?></td>
+                                <td style="text-align:center"><?php echo $emoBadge; ?></td>
                                 <td style="text-align:center">
                                     <div style="display:flex;gap:8px;justify-content:center;align-items:center">
                                         <?php if ($playUrl):
@@ -301,6 +310,14 @@ try {
                             <?php $artistVal = htmlspecialchars($s['artist'] ?? '', ENT_QUOTES, 'UTF-8'); ?>
                             <div style="margin-bottom:12px"><label style="font-weight:600;font-size:13px">📁 歌曲名称</label> <input type="text" name="folderName" value="<?php echo htmlspecialchars($folder); ?>" style="width:100%;margin-top:4px;box-sizing:border-box"></div>
                             <div style="margin-bottom:12px"><label style="font-weight:600;font-size:13px">🎤 歌手</label> <input type="text" name="artist" value="<?php echo $artistVal; ?>" placeholder="FmCoral（留空则默认）" style="width:100%;margin-top:4px;box-sizing:border-box"></div>
+                            <div style="margin-bottom:12px">
+                                <label style="font-weight:600;font-size:13px">🌐 Emo 页展示</label>
+                                <div style="margin-top:4px">
+                                    <input type="hidden" name="showInEmo" value="0">
+                                    <label style="cursor:pointer"><input type="checkbox" name="showInEmo" value="1"<?php echo (isset($s['showInEmo']) ? !empty($s['showInEmo']) : true) ? ' checked' : ''; ?>> 在 Emo 音乐页面展示</label>
+                                    <span class="description" style="margin-left:8px">取消勾选后仅 [music] 短代码可播放，不出现在 Emo 页面</span>
+                                </div>
+                            </div>
                             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
 
                                 <!-- 音频编辑 -->

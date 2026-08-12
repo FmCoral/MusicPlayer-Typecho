@@ -5,7 +5,7 @@
  *
  * @package MusicPlayer
  * @author FmCoral
- * @version 1.2
+ * @version 1.3
  * @link https://github.com/FmCoral/MusicPlayer-Typecho
  */
 
@@ -253,6 +253,11 @@ class Plugin implements PluginInterface
                 if (isset($existing[$folder]['order'])) {
                     $data['order'] = $existing[$folder]['order'];
                 }
+                // showInEmo is a bool: array_key_exists keeps "hidden"(false) too,
+                // which the !empty() preserveKeys check above would drop on rescan.
+                if (array_key_exists('showInEmo', $existing[$folder])) {
+                    $data['showInEmo'] = (bool)$existing[$folder]['showInEmo'];
+                }
             }
         }
         unset($data);
@@ -379,6 +384,9 @@ class Plugin implements PluginInterface
         $songs[$folder]['lyricUrl'] = $lyricMode === 'url' ? trim($data['lyricUrl'] ?? '') : '';
         $songs[$folder]['coverUrl'] = $coverMode === 'url' ? trim($data['coverUrl'] ?? '') : '';
         $songs[$folder]['artist'] = trim($data['artist'] ?? '');
+        // Emo page visibility: field missing from form => show (true) for safety;
+        // hidden+checkbox combo always submits the key, 0/empty => hidden.
+        $songs[$folder]['showInEmo'] = !array_key_exists('showInEmo', $data) || !empty($data['showInEmo']);
 
         // Mark explicitly cleared fields so writeCache() won't restore old values
         if ($lyricMode === 'none') $songs[$folder]['__lyricUrl_clear'] = true;
