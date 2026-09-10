@@ -5,7 +5,7 @@
  *
  * @package MusicPlayer
  * @author FmCoral
- * @version 1.3
+ * @version 1.3.1
  * @link https://github.com/FmCoral/MusicPlayer-Typecho
  */
 
@@ -239,6 +239,13 @@ class Plugin implements PluginInterface
         foreach ($songs as $folder => &$data) {
             if (isset($existing[$folder])) {
                 foreach ($preserveKeys as $key) {
+                    // artist is always explicitly submitted by create/edit forms
+                    // (empty string = use default). Only preserve the old artist
+                    // when it is absent from $data, i.e. a directory rescan via
+                    // 「刷新缓存」which cannot read artist from disk.
+                    if ($key === 'artist' && array_key_exists('artist', $data)) {
+                        continue;
+                    }
                     // If user explicitly cleared this field, don't restore old value
                     $clearKey = '__' . $key . '_clear';
                     if (!empty($data[$clearKey])) {
