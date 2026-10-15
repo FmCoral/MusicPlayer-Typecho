@@ -78,13 +78,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['mp-action'])) {
                         if (!rename($__oldPath, $__newPath)) {
                             throw new \RuntimeException('无法重命名文件夹');
                         }
-                    } elseif (!is_dir($__newPath)) {
-                        @mkdir($__newPath, 0755, true);
+                    } elseif (!empty($__allSongs[$__originalFolder]['audio'])) {
+                        // 缓存里记有本地音频，磁盘上却找不到该目录：多半是缓存名与实际
+                        // 目录名不一致（编码/空格/大小写）。此时若直接新建目录，会造成
+                        // 旧目录残留、新目录为空。必须刷新缓存后再改名。
+                        throw new \RuntimeException('未找到歌曲目录「' . $__originalFolder . '」，请先点「刷新缓存」再重命名');
                     }
-                    // Migrate cache entry
+                    // Migrate cache entry. 不保留旧值、不复活旧条目：迁移后的
+                    // $__allSongs 已含全部歌曲，无需 preserveExternal。
                     $__allSongs[$__newFolder] = $__allSongs[$__originalFolder];
                     unset($__allSongs[$__originalFolder]);
-                    MusicPlugin::writeCache($__allSongs);
+                    MusicPlugin::writeCache($__allSongs, false, false);
                 }
 
                 // Remap prefixed form fields to standard names

@@ -5,7 +5,7 @@
  *
  * @package MusicPlayer
  * @author FmCoral
- * @version 1.3.1
+ * @version 1.3.3
  * @link https://github.com/FmCoral/MusicPlayer-Typecho
  */
 
@@ -228,16 +228,30 @@ class Plugin implements PluginInterface
      *
      * @param array $songs Song data array
      * @param bool $preserveExternal When true, re-add pure external-link songs that exist
-     *                               in the old cache but are missing from $songs.
-     *                               Pass false only when intentionally deleting a song.
+     *                               in the old cache but are missing from $songs. Needed by
+     *                               「刷新缓存」, whose directory scan cannot discover them.
+     * @param bool $preserveFields When true, keep the previous field values of songs that
+     *                             already exist (a directory rescan cannot read
+     *                             audioUrl/lyricUrl/coverUrl/artist from disk).
+     *                             Create/edit/delete MUST pass false: the form submits every
+     *                             field explicitly, so preserving would revert the new values.
      */
-    public static function writeCache(array $songs, bool $preserveExternal = true): void
+    public static function writeCache(array $songs, bool $preserveExternal = true, bool $preserveFields = true): void
     {
         $existing = self::getCache();
         $preserveKeys = ['audioUrl', 'lyricUrl', 'coverUrl', 'artist'];
 
         foreach ($songs as $folder => &$data) {
-            if (isset($existing[$folder])) {
+            // Drop legacy clear-markers so they never get written to the JSON
+            foreach (array_keys($data) as $k) {
+                if (str_starts_with((string)$k, '__') && str_ends_with((string)$k, '_clear')) {
+                    unset($data[$k]);
+                }
+            }
+
+            if (!isset($existing[$folder])) continue;
+
+            if ($preserveFields) {
                 foreach ($preserveKeys as $key) {
                     // artist is always explicitly submitted by create/edit forms
                     // (empty string = use default). Only preserve the old artist
@@ -246,25 +260,20 @@ class Plugin implements PluginInterface
                     if ($key === 'artist' && array_key_exists('artist', $data)) {
                         continue;
                     }
-                    // If user explicitly cleared this field, don't restore old value
-                    $clearKey = '__' . $key . '_clear';
-                    if (!empty($data[$clearKey])) {
-                        unset($data[$clearKey]);
-                        continue;
-                    }
                     if (!empty($existing[$folder][$key])) {
                         $data[$key] = $existing[$folder][$key];
                     }
-                }
-                // Preserve existing order value
-                if (isset($existing[$folder]['order'])) {
-                    $data['order'] = $existing[$folder]['order'];
                 }
                 // showInEmo is a bool: array_key_exists keeps "hidden"(false) too,
                 // which the !empty() preserveKeys check above would drop on rescan.
                 if (array_key_exists('showInEmo', $existing[$folder])) {
                     $data['showInEmo'] = (bool)$existing[$folder]['showInEmo'];
                 }
+            }
+
+            // Preserve existing order value
+            if (isset($existing[$folder]['order'])) {
+                $data['order'] = $existing[$folder]['order'];
             }
         }
         unset($data);
@@ -281,8 +290,16 @@ class Plugin implements PluginInterface
         if (!is_dir(self::getMusicDir())) {
             @mkdir(self::getMusicDir(), 0755, true);
         }
+
+        // Keep the previous revision before overwriting: a wrong write can be
+        // rolled back by renaming music_player.json.bak back in place.
+        $cacheFile = self::getCacheFilePath();
+        if (is_file($cacheFile)) {
+            @copy($cacheFile, $cacheFile . '.bak');
+        }
+
         file_put_contents(
-            self::getCacheFilePath(),
+            $cacheFile,
             json_encode(
                 ['version' => 1, 'updated' => date('Y-m-d H:i:s'), 'songs' => $songs],
                 JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
@@ -349,11 +366,11 @@ class Plugin implements PluginInterface
     public static function createOrUpdateSong(string $folder, array $data, array $files): array
     {
         $targetDir = self::getMusicDir() . '/' . $folder;
-        if (!is_dir($targetDir) && !mkdir($targetDir, 0755, true) && !is_dir($targetDir)) {
-            throw new \RuntimeException('无法创建目录');
-        }
-
         $targets = ['audio' => 'audio', 'lyric' => 'lyric', 'cover' => 'cover'];
+
+        // Collect the uploads that will really be written first, so that a song
+        // using external links only never gets an empty directory created.
+        $pending = [];
         foreach ($targets as $key => $field) {
             $mode = $data[$key . 'Mode'] ?? 'skip';
             if ($mode !== 'upload') continue;
@@ -361,24 +378,47 @@ class Plugin implements PluginInterface
             if ($files[$field]['error'] !== UPLOAD_ERR_OK) continue;
 
             $ext = strtolower(pathinfo($files[$field]['name'], PATHINFO_EXTENSION));
-            $safeName = self::sanitizeFilename($files[$field]['name']);
-            if ($safeName === '') $safeName = $key . '.' . $ext;
-
             $allowed = match ($key) {
                 'audio' => in_array($ext, self::AUDIO_EXT, true),
                 'lyric' => $ext === 'lrc',
                 'cover' => in_array($ext, self::IMAGE_EXT, true),
             };
+            if (!$allowed) continue;
 
-            if ($allowed) {
-                $dest = $targetDir . '/' . $safeName;
-                if (!move_uploaded_file($files[$field]['tmp_name'], $dest)) {
-                    throw new \RuntimeException('文件保存失败：' . $files[$field]['name']);
-                }
+            $safeName = self::sanitizeFilename($files[$field]['name']);
+            if ($safeName === '') $safeName = $key . '.' . $ext;
+
+            $pending[] = ['tmp' => $files[$field]['tmp_name'], 'orig' => $files[$field]['name'], 'safe' => $safeName];
+        }
+
+        if (!is_dir($targetDir) && $pending !== []) {
+            if (!mkdir($targetDir, 0755, true) && !is_dir($targetDir)) {
+                throw new \RuntimeException('无法创建目录');
+            }
+        }
+
+        foreach ($pending as $p) {
+            if (!move_uploaded_file($p['tmp'], $targetDir . '/' . $p['safe'])) {
+                throw new \RuntimeException('文件保存失败：' . $p['orig']);
             }
         }
 
         $songs = self::scanMusicDir();
+
+        // scanMusicDir() only reports the files on disk. Because this method
+        // rewrites the whole cache with preserveFields = false, the metadata of
+        // every OTHER song must be carried over explicitly — otherwise editing
+        // one song wipes the artist / external urls / Emo flag of all others.
+        // The edited song is skipped on purpose: the submitted form wins.
+        $existing = self::getCache();
+        $metaKeys = ['audioUrl', 'lyricUrl', 'coverUrl', 'artist', 'showInEmo', 'order'];
+        foreach ($songs as $f => &$s) {
+            if ($f !== $folder && isset($existing[$f])) {
+                $s += array_intersect_key($existing[$f], array_flip($metaKeys));
+            }
+        }
+        unset($s);
+
         if (!isset($songs[$folder])) {
             $songs[$folder] = ['audio' => [], 'lyric' => null, 'cover' => null];
         }
@@ -395,11 +435,10 @@ class Plugin implements PluginInterface
         // hidden+checkbox combo always submits the key, 0/empty => hidden.
         $songs[$folder]['showInEmo'] = !array_key_exists('showInEmo', $data) || !empty($data['showInEmo']);
 
-        // Mark explicitly cleared fields so writeCache() won't restore old values
-        if ($lyricMode === 'none') $songs[$folder]['__lyricUrl_clear'] = true;
-        if ($coverMode === 'none') $songs[$folder]['__coverUrl_clear'] = true;
-
-        self::writeCache($songs);
+        // The form submitted every field above, so previous values must not be
+        // restored (preserveFields = false). preserveExternal stays true so that
+        // other external-link-only songs survive: a scan cannot see them.
+        self::writeCache($songs, true, false);
         return $songs[$folder];
     }
 
@@ -417,7 +456,8 @@ class Plugin implements PluginInterface
 
         $songs = self::getCache();
         unset($songs[$folder]);
-        self::writeCache($songs, false);   // false = don't resurrect external-link songs
+        // false = don't resurrect external-link songs, don't restore field values
+        self::writeCache($songs, false, false);
         return !is_dir($path);
     }
 
